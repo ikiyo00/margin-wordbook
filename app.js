@@ -722,14 +722,17 @@ function fillSettings() {
   setStatus('ghStatus', ghReady() ? (cfg.ghAuto ? '自动同步已开启，每次改动 2.5 秒后推送。' : '手动同步模式，改动后请点「推送到仓库」。') : '尚未配置同步。');
   setStatus('aiStatus', (cfg.aiBase && cfg.aiKey) ? '已配置分析接口，可在应用内直接拆解长句。' : '未配置，使用复制指令模式。');
 }
-function readSettings() {
+function persistSettings() {
   CFG_FIELDS.forEach(function (k) { const el = $(k); if (el) cfg[k] = el.value.trim(); });
   cfg.ghAuto = $('ghAuto').checked;
   if (!cfg.ghBranch) cfg.ghBranch = 'main';
   if (!cfg.ghPath) cfg.ghPath = 'data/vocabulary.json';
   if (!cfg.aiModel) cfg.aiModel = 'gpt-4o-mini';
-  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
-  fillSettings(); renderSyncPill();
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* 隐私模式下降级为仅内存保存 */ }
+  renderSyncPill();
+}
+function readSettings() {
+  persistSettings(); fillSettings();
 }
 function switchTab(name) {
   Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) { t.classList.toggle('is-active', t.dataset.tab === name); });
@@ -840,6 +843,8 @@ function bind() {
   $('btnAiSave').onclick = function () { readSettings(); toast('分析设置已保存'); };
   $('btnBmMake').onclick = function () { readSettings(); showBookmarklet(); };
   $('appUrl').addEventListener('change', function () { if (!cfg.appUrl && this.value) { cfg.appUrl = this.value.trim(); localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } });
+  CFG_FIELDS.forEach(function (k) { const el = $(k); if (el) el.addEventListener('input', persistSettings); });
+  $('ghAuto').addEventListener('change', persistSettings);
   $('btnGhTest').onclick = async function () {
     readSettings();
     if (!ghReady()) { toast('请先填好所有者、仓库名和 token'); return; }

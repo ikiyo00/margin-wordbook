@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>页边 · 阅读词本</title>
+<meta name="description" content="阅读时留下的词与句：划词收录、原句语境、长难句分析、间隔复习，数据存在你自己的 GitHub 仓库。">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">页</div>
+    <div class="brand-text"><strong>页边</strong><span>Margin · 阅读词本</span></div>
+  </div>
+  <div class="sync-state" id="syncPill"><i class="dot"></i><span>本地模式</span></div>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button class="tab is-active" data-tab="read" role="tab">阅读</button>
+  <button class="tab" data-tab="words" role="tab">词库<span class="badge" id="countWords">0</span></button>
+  <button class="tab" data-tab="review" role="tab">复习<span class="badge" id="countReview">0</span></button>
+  <button class="tab" data-tab="settings" role="tab">设置</button>
+</nav>
+
+<main>
+  <section class="panel is-active" id="panel-read">
+    <div class="panel-head">
+      <div class="head-copy">
+        <h2>阅读台</h2>
+        <p>把章节原文粘进来，选中词或句子即可收录；也可以装书签小工具，在原来的网页上直接划词。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn" id="btnSample" type="button">载入示例段落</button>
+        <button class="btn" id="btnClearReader" type="button">清空</button>
+        <button class="btn btn-primary" id="btnBookmarklet" type="button">生成书签小工具</button>
+      </div>
+    </div>
+
+    <div class="reader-wrap">
+      <div id="reader" class="reader" contenteditable="true" spellcheck="false" data-placeholder="在这里粘贴英文原文，然后选中任意一个词或长句…"></div>
+      <div id="selbar" class="selbar" hidden>
+        <button type="button" data-act="add">加入词库</button>
+        <button type="button" data-act="analyze">分析长句</button>
+        <button type="button" data-act="copy">复制</button>
+      </div>
+    </div>
+
+    <p class="hint">手机上不方便划词时，把微信／网页翻译的结果整段粘贴到下面，点「粘贴解析」也能自动拆出词与释义。</p>
+    <div class="paste-row">
+      <input id="pasteInput" type="text" placeholder="例如：stir up  /stɜːr ʌp/  搅起、激起；或任意含释义的翻译结果">
+      <button class="btn" id="btnPasteParse" type="button">粘贴解析</button>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-words">
+    <div class="panel-head">
+      <div class="head-copy">
+        <h2>词库</h2>
+        <p>每条记录都带着它出现的那句话，复习时回到原场景。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn" id="btnImport" type="button">导入 JSON</button>
+        <button class="btn" id="btnExport" type="button">导出 JSON</button>
+        <button class="btn" id="btnAnki" type="button">导出 Anki CSV</button>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="filters">
+      <input id="searchInput" type="search" placeholder="搜索词、释义或原句…">
+      <select id="bookFilter" aria-label="按来源筛选"><option value="">全部来源</option></select>
+      <div class="chips" id="statusChips">
+        <button class="chip is-active" data-filter="all" type="button">全部</button>
+        <button class="chip" data-filter="word" type="button">生词</button>
+        <button class="chip" data-filter="sentence" type="button">长句</button>
+        <button class="chip" data-filter="due" type="button">待复习</button>
+        <button class="chip" data-filter="known" type="button">已掌握</button>
+      </div>
+    </div>
+
+    <div id="wordList" class="word-list"></div>
+    <input type="file" id="fileInput" accept="application/json,.json" hidden>
+  </section>
+
+  <section class="panel" id="panel-review">
+    <div class="panel-head">
+      <div class="head-copy">
+        <h2>复习</h2>
+        <p>Leitner 间隔（0 / 1 / 3 / 7 / 14 / 30 天）：先回想它在原句里的用法，再翻面核对。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn" id="btnReviewReset" type="button">重新开始</button>
+      </div>
+    </div>
+    <div id="reviewArea"></div>
+  </section>
+
+  <section class="panel" id="panel-settings">
+    <div class="panel-head">
+      <div class="head-copy">
+        <h2>设置</h2>
+        <p>数据默认只存在本机浏览器；填上 GitHub 信息后，电脑和手机就共享同一个仓库里的词库。</p>
+      </div>
+    </div>
+
+    <div class="settings-grid">
+      <div class="card">
+        <h3>GitHub 数据层</h3>
+        <p class="card-note">词库存为仓库里的一个 JSON 文件，每次改动都是一次 commit。需要一枚仅对该仓库有 Contents 读写权限的细粒度 token。</p>
+        <div class="field-grid">
+          <label>仓库所有者<input id="ghOwner" type="text" placeholder="your-github-name" autocomplete="off"></label>
+          <label>仓库名<input id="ghRepo" type="text" placeholder="margin-wordbook" autocomplete="off"></label>
+          <label>分支<input id="ghBranch" type="text" placeholder="main" autocomplete="off"></label>
+          <label>文件路径<input id="ghPath" type="text" placeholder="data/vocabulary.json" autocomplete="off"></label>
+          <label class="span-2">Personal access token<input id="ghToken" type="password" placeholder="github_pat_…" autocomplete="off"></label>
+        </div>
+        <label class="check"><input id="ghAuto" type="checkbox"> 改动后自动推送（每次加词一次 commit）</label>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnGhSave" type="button">保存设置</button>
+          <button class="btn" id="btnGhTest" type="button">测试连接</button>
+          <button class="btn" id="btnGhPull" type="button">从仓库拉取</button>
+          <button class="btn" id="btnGhPush" type="button">推送到仓库</button>
+        </div>
+        <p class="status-line" id="ghStatus">尚未配置同步。</p>
+      </div>
+
+      <div class="card">
+        <h3>长难句分析（可选）</h3>
+        <p class="card-note">填一个 OpenAI 兼容接口即可在应用内直接出分层分析；留空则降级为「复制分析指令」，贴到任意 AI 里也能用。密钥只存在本机。</p>
+        <div class="field-grid">
+          <label class="span-2">接口地址<input id="aiBase" type="text" placeholder="https://api.openai.com/v1" autocomplete="off"></label>
+          <label>模型<input id="aiModel" type="text" placeholder="gpt-4o-mini" autocomplete="off"></label>
+          <label>API key<input id="aiKey" type="password" placeholder="sk-…" autocomplete="off"></label>
+        </div>
+        <div class="btn-row"><button class="btn btn-primary" id="btnAiSave" type="button">保存分析设置</button></div>
+        <p class="status-line" id="aiStatus">未配置，使用复制指令模式。</p>
+      </div>
+
+      <div class="card">
+        <h3>应用地址与书签小工具</h3>
+        <p class="card-note">部署到 GitHub Pages 后把网址填在这里，生成的书签小工具会把划到的词、所在原句和网页出处带回词本。</p>
+        <div class="field-grid">
+          <label class="span-2">应用地址<input id="appUrl" type="url" placeholder="https://your-name.github.io/margin-wordbook/" autocomplete="off"></label>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnBmMake" type="button">生成 / 更新书签小工具</button>
+        </div>
+        <div id="bmResult" class="bm-result" hidden></div>
+      </div>
+
+      <div class="card">
+        <h3>数据管理</h3>
+        <p class="card-note">导入会按 id 合并，不会覆盖已有条目。清空只影响本机，不会删除仓库里的文件。</p>
+        <div class="btn-row">
+          <button class="btn" id="btnResetSample" type="button">恢复示例数据</button>
+          <button class="btn btn-danger" id="btnWipe" type="button">清空本机数据</button>
+        </div>
+        <p class="status-line" id="dataStatus">当前数据存于浏览器 localStorage。</p>
+      </div>
+
+      <div class="card">
+        <h3>四步开始用</h3>
+        <p class="card-note">1 把整个目录推到 GitHub 并开启 Pages → 2 在「应用地址」填 Pages 网址、生成书签小工具并拖到书签栏 → 3 填仓库信息与 token、勾选自动同步 → 4 在原网页划词收录，或把翻译结果粘贴到「阅读」页解析。</p>
+        <p class="card-note" style="margin-bottom:0">词库是仓库里的 <code>data/vocabulary.json</code>，每次改动一次 commit；Actions 每天早上生成 <code>REVIEW.md</code> 复习清单。电脑和手机打开同一个 Pages 网址，填同一份 token 即可共享词库。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="modalRoot" class="modal-root" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

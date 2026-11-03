@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-11-03T21:20:00+08:00",
+  "updatedAt": "2026-11-03T16:04:45.198Z",
   "items": [
     {
       "id": "sample-stir-up",
@@ -11,7 +11,7 @@
       "pos": "phrasal verb",
       "definition": "搅起、激起、挑起（风沙／情绪）",
       "definitionEn": "to cause a substance or feeling to become active or agitated",
-      "sentence": "People in a crowd are \u201ca grain of sand amid other grains of sand, which the wind stirs up at will.\u201d",
+      "sentence": "Individuals in crowds feel anonymous and powerful, leading to destruction and violence; people in a crowd are a grain of sand amid other grains of sand, which the wind stirs up at will.",
       "source": "The Crowd",
       "chapter": "",
       "url": "https://standardebooks.org/ebooks/gustave-le-bon/the-crowd/t-fisher-unwin-ltd",
@@ -31,8 +31,8 @@
       "phonetic": "/əˈnɒnɪməs/",
       "pos": "adjective",
       "definition": "匿名的；无个性特征的",
-      "definitionEn": "not identified by name; lacking individuality or distinguishing features",
-      "sentence": "Individuals in crowds feel anonymous and powerful, leading to destruction and violence.",
+      "definitionEn": "not identified by name; lacking individuality",
+      "sentence": "Individuals in crowds feel anonymous and powerful, leading to destruction and violence; people in a crowd are a grain of sand amid other grains of sand, which the wind stirs up at will.",
       "source": "The Crowd",
       "chapter": "",
       "url": "https://standardebooks.org/ebooks/gustave-le-bon/the-crowd/t-fisher-unwin-ltd",
@@ -53,7 +53,7 @@
       "pos": "",
       "definition": "",
       "definitionEn": "",
-      "sentence": "People in a crowd are \u201ca grain of sand amid other grains of sand, which the wind stirs up at will.\u201d",
+      "sentence": "Individuals in crowds feel anonymous and powerful, leading to destruction and violence; people in a crowd are a grain of sand amid other grains of sand, which the wind stirs up at will.",
       "source": "The Crowd",
       "chapter": "",
       "url": "https://standardebooks.org/ebooks/gustave-le-bon/the-crowd/t-fisher-unwin-ltd",
@@ -64,15 +64,15 @@
       "createdAt": "2026-11-03T21:20:00+08:00",
       "updatedAt": "2026-11-03T21:20:00+08:00",
       "analysis": {
-        "trunk": "People are a grain of sand",
+        "trunk": "people are a grain of sand",
         "chunks": [
-          "People in a crowd",
+          "people in a crowd",
           "a grain of sand",
           "amid other grains of sand",
           "which the wind stirs up at will"
         ],
-        "modifiers": "which 引导非限定定语从句，修饰 grains of sand；at will 意为「随意地」",
-        "rewrite": "群体里的人只是沙堆中的一粒沙，风想怎么吹就怎么吹 —— 匿名、无力",
+        "modifiers": "which 引导非限定定语从句，挂在前文的 grains of sand 上；at will 意为「随意地」",
+        "rewrite": "群体里的人只是沙堆中的一粒沙，风想怎么吹就怎么吹 —— 匿名、无力。",
         "plain": "个人在群体中失去姓名与个性，被群体的力量任意摆布。"
       }
     }

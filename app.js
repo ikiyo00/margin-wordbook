@@ -156,6 +156,45 @@ function toast(msg) {
 }
 function setStatus(id, msg) { const el = $(id); if (el) el.textContent = msg; }
 
+/* 阅读器组件（epub.js / jszip）按需懒加载：核心界面不依赖 CDN，
+   只有当真正打开英语 EPUB 时才去拉这两个库；日语青空文库路径完全不需要它们。
+   每个库都带多个 CDN 兜底，避免 jsdelivr 被墙时英语书读不了。 */
+let _epubLibsPromise = null;
+function loadScriptWithFallback(urls) {
+  return new Promise(function (resolve, reject) {
+    let i = 0;
+    function tryNext() {
+      if (i >= urls.length) { reject(new Error('全部 CDN 均加载失败')); return; }
+      const s = document.createElement('script');
+      s.src = urls[i++]; s.async = true;
+      s.onload = resolve;
+      s.onerror = function () { try { s.remove(); } catch (e) {} tryNext(); };
+      document.head.appendChild(s);
+    }
+    tryNext();
+  });
+}
+const EPUB_CDN = [
+  'https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
+  'https://fastly.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
+  'https://unpkg.com/epubjs@0.3.93/dist/epub.min.js'
+];
+const JSZIP_CDN = [
+  'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+  'https://fastly.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+  'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
+];
+function ensureEpubLibs() {
+  if (_epubLibsPromise) return _epubLibsPromise;
+  _epubLibsPromise = Promise.all([
+    loadScriptWithFallback(EPUB_CDN),
+    loadScriptWithFallback(JSZIP_CDN)
+  ]).then(function () {
+    if (typeof ePub === 'undefined' || typeof JSZip === 'undefined') throw new Error('组件未就绪');
+  });
+  return _epubLibsPromise;
+}
+
 function loadData() {
   try {
     const raw = localStorage.getItem(DATA_KEY);
@@ -937,20 +976,25 @@ function closeBook() {
   if (viewer) { viewer.onmouseup = null; viewer.innerHTML = ''; }
 }
 
-function loadEpubFile(file) {
-  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
+async function loadEpubFile(file) {
+  try { await ensureEpubLibs(); }
+  catch (e) { toast('阅读器组件加载失败（请检查网络，或改用「书库」里的日语书）。'); return; }
   const url = URL.createObjectURL(file);
   openEpub(url, (file.name || '').replace(/\.epub$/i, ''));
 }
 
-function loadEpubFromUrl() {
+async function loadEpubFromUrl() {
   const u = window.prompt('粘贴一个 .epub 的下载链接（例如 Standard Ebooks 的 EPUB 链接）：');
   if (!u) return;
-  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
-  toast('正在加载…'); openEpub(u, '');
+  toast('正在加载…');
+  try { await ensureEpubLibs(); }
+  catch (e) { toast('阅读器组件加载失败（请检查网络）。'); return; }
+  openEpub(u, '');
 }
 
-function openEpub(url, fallbackTitle) {
+async function openEpub(url, fallbackTitle) {
+  try { await ensureEpubLibs(); }
+  catch (e) { toast('阅读器组件加载失败（请检查网络或刷新页面）。'); return; }
   closeBook();
   try { book = ePub(url); } catch (e) { toast('无法打开这本书：' + e.message); return; }
   currentLang = 'en';
@@ -1257,8 +1301,8 @@ function bookTitleFromOpf(opf) {
 }
 
 async function importFromGithub(repo, title) {
-  if (typeof JSZip === 'undefined') { toast('打包组件未加载，请刷新页面后重试'); return; }
-  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
+  try { await ensureEpubLibs(); }
+  catch (e) { toast('阅读器组件加载失败（请检查网络或刷新页面）。'); return; }
   setCatalogStatus('正在连接 GitHub 仓库 ' + repo + ' …');
   let branch = 'master';
   try { const meta = await fetchJson('https://api.github.com/repos/' + repo); if (meta && meta.default_branch) branch = meta.default_branch; }

@@ -18,6 +18,7 @@
 
 <nav class="tabs" id="tabs" role="tablist">
   <button class="tab is-active" data-tab="read" role="tab">阅读</button>
+  <button class="tab" data-tab="reader" role="tab">读书</button>
   <button class="tab" data-tab="words" role="tab">词库<span class="badge" id="countWords">0</span></button>
   <button class="tab" data-tab="review" role="tab">复习<span class="badge" id="countReview">0</span></button>
   <button class="tab" data-tab="settings" role="tab">设置</button>
@@ -51,6 +52,58 @@
       <input id="pasteInput" type="text" placeholder="例如：stir up  /stɜːr ʌp/  搅起、激起；或任意含释义的翻译结果">
       <button class="btn" id="btnPasteParse" type="button">粘贴解析</button>
     </div>
+  </section>
+
+  <section class="panel" id="panel-reader">
+    <div class="panel-head">
+      <div class="head-copy">
+        <h2>读书</h2>
+        <p>导入 EPUB 或青空文库日文书，在这里读；选中词即翻译并自动存入词库。比复制粘贴少好几步。</p>
+      </div>
+      <div class="head-actions">
+        <label class="btn btn-primary" for="epubInput">导入 EPUB</label>
+        <input id="epubInput" type="file" accept=".epub,application/epub+zip" hidden>
+        <button class="btn" id="btnLoadUrl" type="button">从网址加载</button>
+        <button class="btn" id="btnCatalog" type="button">书库</button>
+        <button class="btn" id="btnReaderPrev" type="button">上一章</button>
+        <button class="btn" id="btnReaderNext" type="button">下一章</button>
+      </div>
+    </div>
+
+    <div class="reader-layout" id="readerLayout">
+      <aside class="toc" id="readerToc">
+        <p class="toc-empty">导入一本书后，目录会显示在这里。</p>
+      </aside>
+      <div class="book-area">
+        <div id="bookViewer" class="book-viewer">
+          <p class="viewer-empty">还没有打开书。<br>点右上角「书库」从 Standard Ebooks 或青空文库一键导入，或「导入 EPUB」选择本机文件。</p>
+        </div>
+        <div id="readerBar" class="reader-bar" hidden>
+          <span class="rs-text" id="readerSelText"></span>
+          <span class="rs-actions">
+            <button class="btn btn-primary" data-ract="save" type="button">翻译并保存</button>
+            <button class="btn" data-ract="analyze" type="button">分析长句</button>
+            <button class="btn" data-ract="copy" type="button">复制</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <section class="catalog" id="catalog" hidden>
+      <div class="catalog-bar">
+        <div class="cat-tabs" id="catTabs">
+          <button class="cat-tab is-active" data-cat="en" type="button">英语 · Standard Ebooks</button>
+          <button class="cat-tab" data-cat="ja" type="button">日本語 · 青空文库</button>
+        </div>
+        <input id="catalogSearch" type="search" placeholder="搜索书名或作者，例如 crowd、漱石、sense…">
+        <input id="catalogUrl" type="url" placeholder="或粘贴书籍链接（支持 Standard Ebooks / 青空文库）…">
+        <button class="btn" id="btnCatalogUrl" type="button">导入链接</button>
+        <button class="btn" id="btnCatalogClose" type="button">返回读书</button>
+      </div>
+      <div id="catalogGrid" class="catalog-grid"></div>
+      <p class="catalog-status" id="catalogStatus"></p>
+      <p class="catalog-note" id="catalogNote"></p>
+    </section>
   </section>
 
   <section class="panel" id="panel-words">
@@ -171,6 +224,8 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="modalRoot" class="modal-root" hidden></div>
+<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

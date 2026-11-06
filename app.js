@@ -62,6 +62,10 @@ const DEFAULT_CFG = {
 
 const ANALYSIS_PROMPT = 'You help a Chinese reader parse difficult English sentences from 19th-century nonfiction. Return ONLY a JSON object, no markdown, with these keys: trunk (the bare subject-verb-object skeleton, in English), chunks (array of 2-5 meaning groups in order, keeping the original English words), modifiers (in Chinese: where each subordinate clause, participle or prepositional phrase attaches and what it modifies), rewrite (a plain modern-English paraphrase), plain (a concise Chinese explanation of the logic, NOT a literal full translation). Keep every value a string except chunks. Do not add keys.';
 
+const ANALYSIS_PROMPT_JA = '你是日语语法分析助手，帮助中文读者读懂日语长句。只返回 JSON（不要 markdown 代码块），字段：trunk（主干：主谓宾核心，用日语），chunks（2-5 个按顺序排列的意群，保留原日文），modifiers（中文：说明每个从句／连用形／助词短语修饰什么），rewrite（用现代日语口语重述），plain（用中文说明句子逻辑，不是逐字翻译）。除 chunks 外均为字符串。不要加额外字段。';
+
+function analysisPrompt(lang) { return lang === 'ja' ? ANALYSIS_PROMPT_JA : ANALYSIS_PROMPT; }
+
 const BM_TEMPLATE = `(function(){
 var APP="__APP_URL__";
 if(window.__marginPanel)return;
@@ -249,6 +253,7 @@ function analysisHTML(a) {
 }
 function cardHTML(i) {
   const isSentence = i.kind === 'sentence';
+  const langTag = (i.lang === 'ja') ? '<span class="wc-tag lang">日</span>' : ((i.lang === 'en') ? '<span class="wc-tag lang">EN</span>' : '');
   const tag = isSentence ? '<span class="wc-tag sentence">长句</span>'
     : (i.status === 'known' ? '<span class="wc-tag known">已掌握</span>' : '<span class="wc-tag">L' + (i.level || 0) + ' · 待复习</span>');
   const meta = [i.phonetic, i.pos].filter(Boolean).join(' · ');
@@ -262,7 +267,7 @@ function cardHTML(i) {
       '<button class="danger" data-cmd="delete" data-id="' + esc(i.id) + '">删除</button>';
   return '<article class="word-card">' +
     '<div class="wc-top"><span class="wc-word">' + esc(i.word) + '</span>' +
-    (meta ? '<span class="wc-meta">' + esc(meta) + '</span>' : '') + tag + '</div>' +
+    (meta ? '<span class="wc-meta">' + esc(meta) + '</span>' : '') + langTag + tag + '</div>' +
     '<p class="wc-def">' + esc(def) + defEn + '</p>' +
     (i.sentence ? '<blockquote class="wc-quote">' + esc(i.sentence) + '</blockquote>' : '') +
     analysisHTML(i.analysis) +
@@ -308,6 +313,26 @@ async function lookupWord(word) {
   } catch (e) { return null; }
 }
 
+async function lookupJa(word) {
+  try {
+    const w = String(word || '').trim();
+    if (!w) return null;
+    const r = await fetch('https://jisho.org/api/v1/search/words?keyword=' + encodeURIComponent(w));
+    if (!r.ok) return null;
+    const j = await r.json();
+    const d = (j.data || [])[0];
+    if (!d) return null;
+    const jp = (d.japanese || [])[0] || {};
+    const sense = (d.senses || [])[0] || {};
+    return {
+      word: jp.word || jp.reading || w,
+      reading: jp.reading || '',
+      pos: (sense.parts_of_speech || []).filter(function (s) { return s && s !== 'Wikipedia definition'; }).join('；') || '',
+      definitionEn: (sense.english_definitions || []).join('；') || ''
+    };
+  } catch (e) { return null; }
+}
+
 function openAddModal(p) {
   const edit = !!p.editId;
   const item = edit ? data.items.find(function (x) { return x.id === p.editId; }) : null;
@@ -339,9 +364,12 @@ function openAddModal(p) {
   $('fSave').onclick = function () {
     const word = $('fWord').value.trim();
     if (!word) { toast('请填写单词'); return; }
+    const lang = p.lang || currentLang || 'en';
+    const lemmaRaw = $('fLemma').value.trim() || word;
     const payload = {
       word: word,
-      lemma: ($('fLemma').value.trim() || word).toLowerCase(),
+      lemma: lang === 'ja' ? lemmaRaw : lemmaRaw.toLowerCase(),
+      lang: lang,
       phonetic: $('fPhonetic').value.trim(),
       pos: $('fPos').value.trim(),
       definition: $('fDef').value.trim(),
@@ -373,16 +401,19 @@ function openAddModal(p) {
   };
 
   if (!edit && !v.phonetic && !v.definitionEn) {
-    lookupWord(p.word || '').then(function (res) {
+    const lang = p.lang || currentLang || 'en';
+    const lookup = lang === 'ja' ? lookupJa(p.word || '') : lookupWord(p.word || '');
+    lookup.then(function (res) {
       if (!res || !$('fPhonetic')) return;
-      if (!$('fPhonetic').value) $('fPhonetic').value = res.phonetic || '';
+      if (!$('fPhonetic').value) $('fPhonetic').value = res.reading || res.phonetic || '';
       if (!$('fPos').value) $('fPos').value = res.pos || '';
       if (!$('fDefEn').value) $('fDefEn').value = res.definitionEn || '';
     });
   }
 }
 
-function openAnalysisModal(sentence, existingId) {
+function openAnalysisModal(sentence, existingId, lang) {
+  lang = lang || currentLang || 'en';
   lastAnalysis = null;
   const html = '<h3>长难句分析</h3>' +
     '<p class="sub">先拆主干和意群，再给一版人话改写；不是整句直译。</p>' +
@@ -396,7 +427,7 @@ function openAnalysisModal(sentence, existingId) {
   openModal(html);
 
   $('aCopy').onclick = function () {
-    const text = ANALYSIS_PROMPT + '\n\nSentence:\n' + sentence;
+    const text = analysisPrompt(lang) + '\n\nSentence:\n' + sentence;
     copyText(text);
   };
   $('aSave').onclick = function () {
@@ -408,7 +439,7 @@ function openAnalysisModal(sentence, existingId) {
       data.items.push({
         id: uid(), kind: 'sentence', word: sentence.length > 44 ? sentence.slice(0, 44) + '…' : sentence,
         lemma: '', phonetic: '', pos: '', definition: '', definitionEn: '',
-        sentence: sentence, source: '阅读台', chapter: '', url: '',
+        sentence: sentence, source: '阅读台', chapter: '', url: '', lang: lang,
         status: 'learning', level: 0, nextReview: localDate(), seenCount: 1,
         createdAt: nowISO(), updatedAt: nowISO(), analysis: lastAnalysis
       });
@@ -419,13 +450,13 @@ function openAnalysisModal(sentence, existingId) {
     const btn = this;
     const out = $('analysisOut');
     if (!cfg.aiBase || !cfg.aiKey) {
-      out.innerHTML = '<div class="analysis-view"><p style="margin:0 0 8px">还没配置分析接口。你可以先点「复制分析指令」，把句子贴到任意 AI 里得到同样结果；或在「设置」里填一个 OpenAI 兼容接口。</p><div class="prompt-box">' + esc(ANALYSIS_PROMPT + '\n\nSentence:\n' + sentence) + '</div></div>';
+      out.innerHTML = '<div class="analysis-view"><p style="margin:0 0 8px">还没配置分析接口。你可以先点「复制分析指令」，把句子贴到任意 AI 里得到同样结果；或在「设置」里填一个 OpenAI 兼容接口。</p><div class="prompt-box">' + esc(analysisPrompt(lang) + '\n\nSentence:\n' + sentence) + '</div></div>';
       return;
     }
     btn.disabled = true; btn.textContent = '分析中…';
     out.innerHTML = '<div class="analysis-view">正在拆解句子结构…</div>';
     try {
-      const a = await analyzeSentence(sentence);
+      const a = await analyzeSentence(sentence, lang);
       lastAnalysis = a;
       out.innerHTML = '<div class="analysis-view">' +
         '<div class="row"><b>主干</b><span>' + esc(a.trunk) + '</span></div>' +
@@ -442,14 +473,15 @@ function openAnalysisModal(sentence, existingId) {
   };
 }
 
-async function analyzeSentence(sentence) {
+async function analyzeSentence(sentence, lang) {
+  lang = lang || currentLang || 'en';
   const base = String(cfg.aiBase || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const r = await fetch(base + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.aiKey },
     body: JSON.stringify({
       model: cfg.aiModel || 'gpt-4o-mini',
-      messages: [{ role: 'system', content: ANALYSIS_PROMPT }, { role: 'user', content: sentence }],
+      messages: [{ role: 'system', content: analysisPrompt(lang) }, { role: 'user', content: sentence }],
       temperature: 0.2
     })
   });
@@ -740,6 +772,7 @@ function switchTab(name) {
   render();
   if (name === 'review') startReview();
   if (name === 'settings') fillSettings();
+  if (name === 'reader' && rendition) { setTimeout(function () { try { rendition.resize(); } catch (e) {} }, 60); }
 }
 
 /* ---------- 从书签小工具接收数据 ---------- */
@@ -784,6 +817,7 @@ function bind() {
   $('reader').addEventListener('touchend', handleSelection);
   document.addEventListener('mousedown', function (e) {
     if (!$('selbar').contains(e.target) && !$('reader').contains(e.target)) hideSelbar();
+    if (!$('readerBar').contains(e.target) && !$('bookViewer').contains(e.target)) $('readerBar').hidden = true;
   });
   $('selbar').addEventListener('click', function (e) {
     const b = e.target.closest('button'); if (!b || !selInfo) return;
@@ -869,6 +903,409 @@ function bind() {
     data = { version: 1, updatedAt: nowISO(), items: [] }; saveData(); toast('本机数据已清空');
   };
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+
+  /* 读书 / 阅读器 */
+  $('epubInput').onchange = function (e) { const f = e.target.files && e.target.files[0]; if (f) loadEpubFile(f); e.target.value = ''; };
+  $('btnLoadUrl').onclick = loadEpubFromUrl;
+  $('btnReaderPrev').onclick = function () { if (rendition) rendition.prev(); };
+  $('btnReaderNext').onclick = function () { if (rendition) rendition.next(); };
+  $('btnCatalog').onclick = function () { openCatalog(); };
+  $('btnCatalogClose').onclick = hideCatalog;
+  $('btnCatalogUrl').onclick = importFromUrlInput;
+  $('catTabs').addEventListener('click', function (e) {
+    const b = e.target.closest('.cat-tab'); if (!b) return;
+    openCatalog(b.dataset.cat);
+  });
+  $('catalogSearch').oninput = function () { renderCatalog(filterCatalog(this.value)); };
+  $('readerBar').addEventListener('click', function (e) {
+    const b = e.target.closest('[data-ract]'); if (!b) return;
+    const act = b.dataset.ract;
+    if (act === 'save') readerSave();
+    else if (act === 'analyze') { if (pendingSel.sentence) { $('readerBar').hidden = true; openAnalysisModal(pendingSel.sentence, null, currentLang); } }
+    else if (act === 'copy') { copyText(pendingSel.text); toast('已复制'); }
+  });
+}
+
+/* ---------- 读书 / 阅读器（EPUB） ---------- */
+var book = null, rendition = null, pendingSel = { text: '', sentence: '', word: '' }, bookTitle = '';
+var currentLang = 'en', catalogLang = 'en';
+
+function closeBook() {
+  try { if (rendition) { rendition.destroy(); rendition = null; } } catch (e) {}
+  try { if (book) { book.destroy(); book = null; } } catch (e) {}
+  const viewer = $('bookViewer');
+  if (viewer) { viewer.onmouseup = null; viewer.innerHTML = ''; }
+}
+
+function loadEpubFile(file) {
+  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
+  const url = URL.createObjectURL(file);
+  openEpub(url, (file.name || '').replace(/\.epub$/i, ''));
+}
+
+function loadEpubFromUrl() {
+  const u = window.prompt('粘贴一个 .epub 的下载链接（例如 Standard Ebooks 的 EPUB 链接）：');
+  if (!u) return;
+  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
+  toast('正在加载…'); openEpub(u, '');
+}
+
+function openEpub(url, fallbackTitle) {
+  closeBook();
+  try { book = ePub(url); } catch (e) { toast('无法打开这本书：' + e.message); return; }
+  currentLang = 'en';
+  bookTitle = fallbackTitle || '未命名';
+  const viewer = $('bookViewer');
+  viewer.innerHTML = '';
+  try {
+    rendition = book.renderTo(viewer, { width: '100%', height: '100%', flow: 'scrolled', spread: 'none' });
+  } catch (e) { toast('初始化阅读器失败：' + e.message); return; }
+  rendition.display().then(function () { bindReaderSelection(); })
+    .catch(function (e) { toast('渲染失败：' + e.message); });
+  book.loaded.metadata.then(function (m) { if (m && m.title) bookTitle = m.title; });
+  book.loaded.navigation.then(function (nav) {
+    renderToc(nav.toc);
+    resumeProgress();
+  }).catch(function () {
+    $('readerToc').innerHTML = '<p class="toc-empty">这本书没有可用目录。</p>';
+  });
+  rendition.on('relocated', function (loc) {
+    try { if (loc && loc.start && loc.start.cfi) localStorage.setItem('epub-progress:' + bookTitle, loc.start.cfi); } catch (e) {}
+  });
+}
+
+function resumeProgress() {
+  let cfi = null;
+  try { cfi = localStorage.getItem('epub-progress:' + bookTitle); } catch (e) {}
+  if (cfi) rendition.display(cfi).then(bindReaderSelection).catch(function () {});
+}
+
+function renderToc(items, depth) {
+  depth = depth || 0;
+  const box = $('readerToc');
+  if (depth === 0) box.innerHTML = '';
+  (items || []).forEach(function (it) {
+    const a = document.createElement('a');
+    a.textContent = it.label || '(无标题)';
+    a.href = 'javascript:;';
+    if (depth > 0) a.className = 'toc-indent';
+    a.onclick = function () { rendition.display(it.href).then(bindReaderSelection); markActiveToc(a); };
+    box.appendChild(a);
+    if (it.subitems && it.subitems.length) renderToc(it.subitems, depth + 1);
+  });
+}
+
+function markActiveToc(a) {
+  Array.prototype.forEach.call($('readerToc').querySelectorAll('a'), function (x) { x.classList.remove('is-active'); });
+  a.classList.add('is-active');
+}
+
+function getViewerSelection() {
+  const iframe = $('bookViewer').querySelector('iframe');
+  if (!iframe) return null;
+  const win = iframe.contentWindow || (iframe.contentDocument && iframe.contentDocument.defaultView);
+  const sel = win && win.getSelection && win.getSelection();
+  if (!sel || !sel.toString().trim()) return null;
+  return sel;
+}
+
+function bindReaderSelection() {
+  if (!rendition) return;
+  try { rendition.off('selected'); } catch (e) {}
+  rendition.on('selected', function () {
+    const sel = getViewerSelection();
+    if (!sel) return;
+    const text = sel.toString().trim();
+    pendingSel.text = text;
+    pendingSel.word = text.split(/\s+/)[0].replace(/[^A-Za-z'-]/g, '');
+    pendingSel.sentence = selectionSentence(sel);
+    $('readerSelText').textContent = '已选：' + (text.length > 40 ? text.slice(0, 40) + '…' : text);
+    $('readerBar').hidden = false;
+  });
+}
+
+function selectionSentence(sel) {
+  try {
+    let node = sel.anchorNode;
+    if (!node) return pendingSel.text;
+    let el = node.nodeType === 3 ? node.parentElement : node;
+    const blocks = /^(P|DIV|LI|BLOCKQUOTE|TD|H1|H2|H3|H4|H5|H6)$/;
+    let guard = 0;
+    while (el && guard < 6 && !blocks.test(el.tagName)) { el = el.parentElement; guard++; }
+    let txt = (el ? el.textContent : sel.toString() || '').replace(/\s+/g, ' ').trim();
+    if (currentLang === 'ja' && txt.length > 120) {
+      const selText = sel.toString().trim();
+      const idx = txt.indexOf(selText);
+      if (idx >= 0) {
+        let s = txt.lastIndexOf('。', idx); if (s < 0) s = 0; else s += 1;
+        let e = txt.indexOf('。', idx + selText.length); if (e < 0) e = txt.length; else e += 1;
+        txt = txt.slice(s, e).trim();
+      }
+    }
+    return txt.length > 500 ? txt.slice(0, 500) : txt;
+  } catch (e) { return pendingSel.text; }
+}
+
+/* 青空文库：直接从 GitHub 镜像抓取正文 HTML，抽取 #main_text（含振假名）渲染 */
+async function openAozora(cardPath, title) {
+  setCatalogStatus('正在从青空文库（GitHub）读取…');
+  let branch = 'master';
+  const gh = function (p) { return 'https://raw.githubusercontent.com/aozorabunko/aozorabunko/' + branch + '/' + p; };
+  let cardHtml = null;
+  try { cardHtml = await fetchText(gh(cardPath)); }
+  catch (e) {
+    branch = 'main';
+    try { cardHtml = await fetchText(gh(cardPath)); }
+    catch (e2) { setCatalogStatus('无法读取该书卡页（' + cardPath + '）。请确认链接，或网络/镜像问题稍后重试。'); toast('导入失败'); return; }
+  }
+  let fileHref = null;
+  const xm = cardHtml.match(/href="(\.\/files\/[^"]+\.html)"[^>]*>([^<]*XHTML版で読む[^<]*)</i);
+  if (xm) fileHref = xm[1];
+  if (!fileHref) { const fm = cardHtml.match(/href="(\.\/files\/[^"]+\.html)"/i); if (fm) fileHref = fm[1]; }
+  if (!fileHref) { setCatalogStatus('卡页里没有找到正文文件链接。'); toast('导入失败'); return; }
+  const dir = cardPath.split('/').slice(0, 2).join('/');
+  const fileUrl = gh(dir + '/' + fileHref.replace(/^\.\//, ''));
+  let body = null;
+  try { body = await fetchText(fileUrl); }
+  catch (e) { setCatalogStatus('无法读取正文文件。'); toast('导入失败'); return; }
+  const doc = new DOMParser().parseFromString(body, 'text/html');
+  let mt = doc.querySelector('.main_text, #main_text') || doc.body;
+  const viewer = $('bookViewer');
+  closeBook();
+  const wrap = document.createElement('div');
+  wrap.className = 'aozora-text';
+  wrap.innerHTML = mt ? mt.innerHTML : body;
+  viewer.appendChild(wrap);
+  currentLang = 'ja';
+  bookTitle = title || '青空文库作品';
+  setCatalogStatus('');
+  hideCatalog();
+  bindAozoraSelection();
+  toast('已打开：' + bookTitle);
+}
+
+function bindAozoraSelection() {
+  const viewer = $('bookViewer');
+  viewer.onmouseup = function () {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : '';
+    if (!text || !sel.anchorNode || !viewer.contains(sel.anchorNode)) return;
+    pendingSel.text = text;
+    pendingSel.word = text;
+    pendingSel.sentence = selectionSentence(sel);
+    $('readerSelText').textContent = '已选：' + (text.length > 40 ? text.slice(0, 40) + '…' : text);
+    $('readerBar').hidden = false;
+  };
+}
+
+function readerSave() {
+  if (!pendingSel.text) return;
+  $('readerBar').hidden = true;
+  openAddModal({ word: pendingSel.text, sentence: pendingSel.sentence, source: bookTitle, url: '', lang: currentLang });
+}
+
+/* ---------- 书库：从 Standard Ebooks (GitHub 源) 一键导入 ---------- */
+var BUILTIN_CATALOG = [
+  { title: 'The Crowd', author: 'Gustave Le Bon', repo: 'standardebooks/gustave-le-bon_the-crowd_t-fisher-unwin-ltd', subject: '心理学 · 哲学' },
+  { title: 'Pride and Prejudice', author: 'Jane Austen', repo: 'standardebooks/jane-austen_pride-and-prejudice', subject: '小说' },
+  { title: 'Emma', author: 'Jane Austen', repo: 'standardebooks/jane-austen_emma', subject: '小说' },
+  { title: 'Sense and Sensibility', author: 'Jane Austen', repo: 'standardebooks/jane-austen_sense-and-sensibility', subject: '小说' },
+  { title: 'The Great Gatsby', author: 'F. Scott Fitzgerald', repo: 'standardebooks/f-scott-fitzgerald_the-great-gatsby', subject: '小说' },
+  { title: '1984', author: 'George Orwell', repo: 'standardebooks/george-orwell_1984', subject: '小说' },
+  { title: 'Animal Farm', author: 'George Orwell', repo: 'standardebooks/george-orwell_animal-farm', subject: '小说' },
+  { title: 'Moby-Dick', author: 'Herman Melville', repo: 'standardebooks/herman-melville_moby-dick', subject: '小说' },
+  { title: 'Adventures of Huckleberry Finn', author: 'Mark Twain', repo: 'standardebooks/mark-twain_the-adventures-of-huckleberry-finn', subject: '小说' },
+  { title: 'Jane Eyre', author: 'Charlotte Brontë', repo: 'standardebooks/charlotte-bronte_jane-eyre', subject: '小说' },
+  { title: 'Wuthering Heights', author: 'Emily Brontë', repo: 'standardebooks/emily-bronte_wuthering-heights', subject: '小说' },
+  { title: 'Frankenstein', author: 'Mary Shelley', repo: 'standardebooks/mary-shelley_frankenstein-or-the-modern-prometheus', subject: '小说' },
+  { title: "Alice's Adventures in Wonderland", author: 'Lewis Carroll', repo: 'standardebooks/lewis-carroll_alices-adventures-in-wonderland', subject: '小说' },
+  { title: 'The Time Machine', author: 'H. G. Wells', repo: 'standardebooks/h-g-wells_the-time-machine', subject: '科幻' },
+  { title: 'The Picture of Dorian Gray', author: 'Oscar Wilde', repo: 'standardebooks/oscar-wilde_the-picture-of-dorian-gray', subject: '小说' },
+  { title: 'Dracula', author: 'Bram Stoker', repo: 'standardebooks/bram-stoker_dracula', subject: '小说' },
+  { title: 'Treasure Island', author: 'Robert Louis Stevenson', repo: 'standardebooks/robert-louis-stevenson_treasure-island', subject: '小说' },
+  { title: 'A Study in Scarlet', author: 'Arthur Conan Doyle', repo: 'standardebooks/arthur-conan-doyle_a-study-in-scarlet', subject: '侦探' },
+  { title: 'The Call of the Wild', author: 'Jack London', repo: 'standardebooks/jack-london_the-call-of-the-wild', subject: '小说' },
+  { title: 'Little Women', author: 'Louisa May Alcott', repo: 'standardebooks/louisa-may-alcott_little-women', subject: '小说' }
+];
+
+/* 青空文库（公版日文书），cardPath 指向 GitHub 镜像 aozorabunko/aozorabunko 上的卡页。
+   经 aozora.gr.jp 索引逐一核对作品 ID，导入时浏览器实时抓取正文，保留振假名。 */
+var AOZORA_CATALOG = [
+  { title: '坊っちゃん', author: '夏目漱石', cardPath: 'cards/000148/card752.html' },
+  { title: '吾輩は猫である', author: '夏目漱石', cardPath: 'cards/000148/card789.html' },
+  { title: '三四郎', author: '夏目漱石', cardPath: 'cards/000148/card58842.html' },
+  { title: 'それから', author: '夏目漱石', cardPath: 'cards/000148/card1746.html' },
+  { title: 'こころ', author: '夏目漱石', cardPath: 'cards/000148/card773.html' },
+  { title: '人間失格', author: '太宰治', cardPath: 'cards/000035/card301.html' },
+  { title: '走れメロス', author: '太宰治', cardPath: 'cards/000035/card1567.html' },
+  { title: '津軽', author: '太宰治', cardPath: 'cards/000035/card2282.html' },
+  { title: '斜陽', author: '太宰治', cardPath: 'cards/000035/card1565.html' },
+  { title: '銀河鉄道の夜', author: '宮沢賢治', cardPath: 'cards/000081/card46322.html' },
+  { title: '注文の多い料理店', author: '宮沢賢治', cardPath: 'cards/000081/card43754.html' },
+  { title: '風の又三郎', author: '宮沢賢治', cardPath: 'cards/000081/card462.html' },
+  { title: '山月記', author: '中島敦', cardPath: 'cards/000119/card624.html' },
+  { title: '名人伝', author: '中島敦', cardPath: 'cards/000119/card620.html' },
+  { title: '李陵', author: '中島敦', cardPath: 'cards/000119/card1737.html' },
+  { title: '舞姫', author: '森鴎外', cardPath: 'cards/000129/card2078.html' },
+  { title: '高瀬舟', author: '森鴎外', cardPath: 'cards/000129/card691.html' },
+  { title: '檸檬', author: '梶井基次郎', cardPath: 'cards/000074/card46349.html' },
+  { title: 'のんきな患者', author: '梶井基次郎', cardPath: 'cards/000074/card425.html' },
+  { title: 'ごん狐', author: '新美南吉', cardPath: 'cards/000121/card628.html' },
+  { title: '手袋を買いに', author: '新美南吉', cardPath: 'cards/000121/card637.html' },
+  { title: '赤いろうそくと人魚', author: '小川未明', cardPath: 'cards/001475/card51005.html' },
+  { title: 'ドグラ・マグラ', author: '夢野久作', cardPath: 'cards/000096/card2093.html' },
+  { title: '恩讐の彼方に', author: '菊池寛', cardPath: 'cards/000083/card496.html' },
+  { title: '父帰る', author: '菊池寛', cardPath: 'cards/000083/card502.html' },
+  { title: '刺青', author: '谷崎潤一郎', cardPath: 'cards/001383/card56641.html' },
+  { title: '羅生門', author: '芥川龍之介', cardPath: 'cards/000879/card128.html' },
+  { title: '蜘蛛の糸', author: '芥川龍之介', cardPath: 'cards/000879/card92.html' },
+  { title: '杜子春', author: '芥川龍之介', cardPath: 'cards/000879/card43015.html' },
+  { title: '鼻', author: '芥川龍之介', cardPath: 'cards/000879/card42.html' },
+  { title: '河童', author: '芥川龍之介', cardPath: 'cards/000879/card69.html' }
+];
+
+function fetchText(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }); }
+function fetchArrayBuffer(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); }); }
+function fetchJson(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }); }
+
+function setCatalogStatus(s) { const el = $('catalogStatus'); if (el) el.textContent = s || ''; }
+
+function openCatalog(lang) {
+  catalogLang = lang || catalogLang || 'en';
+  Array.prototype.forEach.call($('catTabs').querySelectorAll('.cat-tab'), function (t) {
+    t.classList.toggle('is-active', t.dataset.cat === catalogLang);
+  });
+  const note = $('catalogNote');
+  if (catalogLang === 'ja') {
+    note.textContent = '书源来自青空文库（公版书，经 GitHub 镜像 aozorabunko）。浏览器直接抓取正文、保留振假名，不经任何第三方服务器，需要联网首次加载。';
+  } else {
+    note.textContent = '书源来自 Standard Ebooks（均为公版书）。浏览器里把 GitHub 上的排版源实时拼装成 EPUB，不下载到本机、不经任何第三方服务器。需要联网首次加载。';
+  }
+  renderCatalog(filterCatalog(''));
+  $('catalog').hidden = false;
+  $('readerLayout').style.display = 'none';
+  setCatalogStatus('');
+  $('catalogSearch').value = '';
+}
+function hideCatalog() {
+  $('catalog').hidden = true;
+  $('readerLayout').style.display = '';
+}
+function filterCatalog(q) {
+  q = (q || '').trim().toLowerCase();
+  const list = catalogLang === 'ja' ? AOZORA_CATALOG : BUILTIN_CATALOG;
+  if (!q) return list;
+  return list.filter(function (b) {
+    return (b.title + ' ' + b.author + ' ' + (b.subject || '')).toLowerCase().indexOf(q) >= 0;
+  });
+}
+function renderCatalog(list) {
+  const grid = $('catalogGrid'); grid.innerHTML = '';
+  if (!list.length) { grid.innerHTML = '<p class="toc-empty">没有匹配的书。换个关键词，或用「粘贴链接」导入任意公版书。</p>'; return; }
+  list.forEach(function (b) {
+    const isJa = !!b.cardPath;
+    const card = document.createElement('div'); card.className = 'book-card';
+    const sub = b.subject || (isJa ? '日本語' : '');
+    card.innerHTML = '<div class="bc-title"></div><div class="bc-author"></div>' +
+      (sub ? '<div class="bc-subject"></div>' : '') +
+      '<button class="btn btn-primary bc-import" type="button">导入并阅读</button>';
+    card.querySelector('.bc-title').textContent = b.title;
+    card.querySelector('.bc-author').textContent = b.author;
+    if (sub) card.querySelector('.bc-subject').textContent = sub;
+    const btn = card.querySelector('.bc-import');
+    btn.onclick = function () {
+      btn.disabled = true; btn.textContent = '导入中…';
+      const importer = isJa ? openAozora(b.cardPath, b.title) : importFromGithub(b.repo, b.title);
+      importer.then(function () { btn.disabled = false; btn.textContent = '导入并阅读'; })
+        .catch(function () { btn.disabled = false; btn.textContent = '导入并阅读'; });
+    };
+    grid.appendChild(card);
+  });
+}
+
+function repoFromUrl(u) {
+  u = (u || '').trim();
+  const m = u.match(/standardebooks\.org\/ebooks\/([^/]+)\/([^/]+)(?:\/([^/?#]+))?/);
+  if (m) { let slug = m[1] + '_' + m[2]; if (m[3]) slug += '_' + m[3]; return 'standardebooks/' + slug; }
+  const g = u.match(/github\.com\/(standardebooks\/[A-Za-z0-9._-]+)/);
+  if (g) return g[1];
+  return null;
+}
+function aozoraCardPathFromUrl(u) {
+  const m = u.match(/cards\/[^\/]+\/card[^\/]+\.html/i);
+  return m ? m[0] : null;
+}
+function importFromUrlInput() {
+  const u = $('catalogUrl').value.trim();
+  if (!u) { toast('请先粘贴书籍链接'); return; }
+  if (/aozora\.gr\.jp\/cards\/|aozorabunko|cards\/\d+\/card/i.test(u)) {
+    const cardPath = aozoraCardPathFromUrl(u);
+    if (!cardPath) { toast('无法从该链接识别青空文库作品'); return; }
+    setCatalogStatus('正在从青空文库导入…');
+    openAozora(cardPath, '');
+  } else {
+    const repo = repoFromUrl(u);
+    if (!repo) { toast('无法识别该链接（支持 Standard Ebooks 或 青空文库链接）'); return; }
+    setCatalogStatus('正在导入 ' + repo + ' …');
+    importFromGithub(repo, '');
+  }
+}
+
+function bookTitleFromOpf(opf) {
+  const m = opf.match(/<dc:title[^>]*>([\s\S]*?)<\/dc:title>/i);
+  return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+}
+
+async function importFromGithub(repo, title) {
+  if (typeof JSZip === 'undefined') { toast('打包组件未加载，请刷新页面后重试'); return; }
+  if (typeof ePub === 'undefined') { toast('阅读器组件未加载，请刷新页面'); return; }
+  setCatalogStatus('正在连接 GitHub 仓库 ' + repo + ' …');
+  let branch = 'master';
+  try { const meta = await fetchJson('https://api.github.com/repos/' + repo); if (meta && meta.default_branch) branch = meta.default_branch; }
+  catch (e) { /* 兜底 master */ }
+  let base = 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/src/epub/';
+  setCatalogStatus('正在读取书目元数据…');
+  let opfText = null;
+  try { opfText = await fetchText(base + 'content.opf'); }
+  catch (e) {
+    if (branch === 'master') {
+      branch = 'main'; base = 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/src/epub/';
+      try { opfText = await fetchText(base + 'content.opf'); }
+      catch (e2) { setCatalogStatus('无法读取该书源（' + repo + '）。请确认仓库名，或用「粘贴链接」导入。'); toast('导入失败'); return; }
+    } else { setCatalogStatus('无法读取该书源。'); toast('导入失败'); return; }
+  }
+  if (!opfText) { setCatalogStatus('书目内容为空。'); return; }
+  const mMan = opfText.match(/<manifest[\s\S]*?<\/manifest>/i);
+  let hrefs = [];
+  if (mMan) { const re = /\shref="([^"]+)"/g; let mm; while ((mm = re.exec(mMan[0]))) hrefs.push(mm[1]); }
+  hrefs = hrefs.filter(function (h) { return h && !/^https?:/i.test(h); });
+  if (!hrefs.length) { setCatalogStatus('书目里没有可读取的内容。'); toast('导入失败'); return; }
+  setCatalogStatus('正在拼装电子书（' + hrefs.length + ' 个文件）…');
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+  zip.file('META-INF/container.xml',
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n' +
+    '  <rootfiles>\n' +
+    '    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>\n' +
+    '  </rootfiles>\n' +
+    '</container>');
+  let ok = 0;
+  for (let i = 0; i < hrefs.length; i++) {
+    const rel = hrefs[i].replace(/^\.\//, '');
+    try { const buf = await fetchArrayBuffer(base + rel); zip.file(rel, buf); ok++; }
+    catch (e) { /* 单项失败忽略，尽量拼出可读的书 */ }
+    if (i % 4 === 0) setCatalogStatus('正在拼装电子书… ' + ok + '/' + hrefs.length);
+  }
+  if (!ok) { setCatalogStatus('所有文件都抓取失败，请检查网络或稍后重试。'); toast('导入失败'); return; }
+  setCatalogStatus('正在生成电子书…');
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const finalTitle = title || bookTitleFromOpf(opfText) || repo.split('/').pop();
+  setCatalogStatus('');
+  hideCatalog();
+  const url = URL.createObjectURL(blob);
+  openEpub(url, finalTitle);
+  toast('已打开：' + finalTitle);
 }
 
 function init() {

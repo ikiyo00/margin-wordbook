@@ -224,8 +224,10 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="modalRoot" class="modal-root" hidden></div>
-<!-- 阅读器组件（epub.js / jszip）改为「用到时才懒加载」，不在页面加载时阻塞，
-     即使 jsdelivr 被墙，标签页 / 书库 / 词库 / 日语书也照常可用 -->
+<!-- 阅读器组件（epub.js / jszip）已本地化进仓库，不再依赖任何外部 CDN。
+     三个脚本均为 defer，按文档顺序执行：epub → jszip → app，故 app.js 运行时全局 ePub/JSZip 已就绪。 -->
+<script src="epub.min.js" defer></script>
+<script src="jszip.min.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

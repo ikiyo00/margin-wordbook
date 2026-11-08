@@ -185,6 +185,9 @@ const JSZIP_CDN = [
   'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
 ];
 function ensureEpubLibs() {
+  // 本地已随页面 defer 加载（epub.min.js / jszip.min.js），全局 ePub/JSZip 应已就绪，直接用。
+  if (typeof ePub !== 'undefined' && typeof JSZip !== 'undefined') return Promise.resolve();
+  // 极端兜底：本地脚本意外缺失（例如上传时漏了这两个文件）时再从 CDN 补。
   if (_epubLibsPromise) return _epubLibsPromise;
   _epubLibsPromise = Promise.all([
     loadScriptWithFallback(EPUB_CDN),
@@ -1004,8 +1007,13 @@ async function openEpub(url, fallbackTitle) {
   try {
     rendition = book.renderTo(viewer, { width: '100%', height: '100%', flow: 'scrolled', spread: 'none' });
   } catch (e) { toast('初始化阅读器失败：' + e.message); return; }
-  rendition.display().then(function () { bindReaderSelection(); })
-    .catch(function (e) { toast('渲染失败：' + e.message); });
+  rendition.display().then(function () {
+    bindReaderSelection();
+    // 可见性兜底：确认阅读器 iframe 已注入容器，否则给出明确提示而非静默空白
+    const ifr = viewer.querySelector('iframe');
+    if (!ifr) { toast('渲染完成但未生成阅读视图，请刷新页面重试'); return; }
+    toast('已打开：' + bookTitle);
+  }).catch(function (e) { toast('渲染失败：' + (e && e.message ? e.message : e)); });
   book.loaded.metadata.then(function (m) { if (m && m.title) bookTitle = m.title; });
   book.loaded.navigation.then(function (nav) {
     renderToc(nav.toc);
@@ -1090,42 +1098,79 @@ function selectionSentence(sel) {
   } catch (e) { return pendingSel.text; }
 }
 
-/* 青空文库：直接从 GitHub 镜像抓取正文 HTML，抽取 #main_text（含振假名）渲染 */
+/* 青空文库：优先读「自托管」正文（同源、带 CORS、永不失效）；
+   若尚未内置，则回退 aozora.gr.jp 官网直连，再回退 CORS 代理。
+   旧数据源 aozorabunko GitHub 镜像已被删除，故不再使用。 */
 async function openAozora(cardPath, title) {
-  setCatalogStatus('正在从青空文库（GitHub）读取…');
-  let branch = 'master';
-  const gh = function (p) { return 'https://raw.githubusercontent.com/aozorabunko/aozorabunko/' + branch + '/' + p; };
-  let cardHtml = null;
-  try { cardHtml = await fetchText(gh(cardPath)); }
-  catch (e) {
-    branch = 'main';
-    try { cardHtml = await fetchText(gh(cardPath)); }
-    catch (e2) { setCatalogStatus('无法读取该书卡页（' + cardPath + '）。请确认链接，或网络/镜像问题稍后重试。'); toast('导入失败'); return; }
+  const stableId = (cardPath.match(/card(\d+)\.html/i) || [,''])[1];
+  setCatalogStatus('正在打开青空文库作品…');
+  // 1) 自托管优先（同源、带 CORS、永不失效）
+  if (stableId) {
+    try {
+      const selfBody = await fetchText('data/aozora/' + stableId + '.html');
+      renderAozoraBody(selfBody, title || '青空文库作品');
+      return;
+    } catch (e) { /* 尚无自托管文件，继续回退 */ }
   }
+  // 2) 官网直连 + 3) CORS 代理兜底
+  const dir = cardPath.split('/').slice(0, 2).join('/');
+  const cardUrl = 'https://www.aozora.gr.jp/' + cardPath;
+  let cardHtml = null;
+  try { cardHtml = await fetchTextCors(cardUrl); }
+  catch (e) { setCatalogStatus('无法读取该书卡页（青空文库官网，或网络/跨域限制）。可稍后重试，或在「粘贴链接」里直接贴官网链接。'); toast('导入失败'); return; }
   let fileHref = null;
-  const xm = cardHtml.match(/href="(\.\/files\/[^"]+\.html)"[^>]*>([^<]*XHTML版で読む[^<]*)</i);
+  const xm = cardHtml.match(/href="(\.\/files\/[^"]+\.html)"[^>]*>([^<]*XHTML[^<]*)</i);
   if (xm) fileHref = xm[1];
   if (!fileHref) { const fm = cardHtml.match(/href="(\.\/files\/[^"]+\.html)"/i); if (fm) fileHref = fm[1]; }
   if (!fileHref) { setCatalogStatus('卡页里没有找到正文文件链接。'); toast('导入失败'); return; }
-  const dir = cardPath.split('/').slice(0, 2).join('/');
-  const fileUrl = gh(dir + '/' + fileHref.replace(/^\.\//, ''));
+  const fileUrl = 'https://www.aozora.gr.jp/' + dir + '/' + fileHref.replace(/^\.\//, '');
   let body = null;
-  try { body = await fetchText(fileUrl); }
-  catch (e) { setCatalogStatus('无法读取正文文件。'); toast('导入失败'); return; }
+  try { body = await fetchTextCors(fileUrl); }
+  catch (e) { setCatalogStatus('无法读取正文（青空文库官网，或跨域限制）。可改用「粘贴链接」从官网手动导入，或等待我们把书籍内置到仓库。'); toast('导入失败'); return; }
+  renderAozoraBody(body, title || '青空文库作品');
+}
+
+/* 渲染青空文库正文：抽取 .main_text（含振假名），并把相对 CSS/图片改为官网绝对路径 */
+function renderAozoraBody(body, title) {
   const doc = new DOMParser().parseFromString(body, 'text/html');
-  let mt = doc.querySelector('.main_text, #main_text') || doc.body;
+  const mt = doc.querySelector('.main_text, #main_text') || doc.body;
   const viewer = $('bookViewer');
   closeBook();
   const wrap = document.createElement('div');
   wrap.className = 'aozora-text';
   wrap.innerHTML = mt ? mt.innerHTML : body;
+  wrap.querySelectorAll('link[href], img[src]').forEach(function (el) {
+    const key = el.hasAttribute('href') ? 'href' : 'src';
+    const a = el.getAttribute(key) || '';
+    if (a && a.indexOf('http') !== 0 && a.charAt(0) !== '/') {
+      el.setAttribute(key, 'https://www.aozora.gr.jp/' + a.replace(/^\.\//, ''));
+    }
+  });
   viewer.appendChild(wrap);
   currentLang = 'ja';
-  bookTitle = title || '青空文库作品';
+  bookTitle = title;
   setCatalogStatus('');
   hideCatalog();
   bindAozoraSelection();
   toast('已打开：' + bookTitle);
+}
+
+/* 直连优先，失败依次尝试多个 CORS 代理（应对浏览器跨域拦截） */
+async function fetchTextCors(url) {
+  try { return await fetchText(url); }
+  catch (e) {
+    const proxies = [
+      'https://api.allorigins.win/raw?url=',
+      'https://corsproxy.io/?url=',
+      'https://thingproxy.freeboard.io/fetch/'
+    ];
+    let lastErr = e;
+    for (let i = 0; i < proxies.length; i++) {
+      try { return await fetchText(proxies[i] + encodeURIComponent(url)); }
+      catch (e2) { lastErr = e2; }
+    }
+    throw lastErr;
+  }
 }
 
 function bindAozoraSelection() {
@@ -1210,6 +1255,18 @@ var AOZORA_CATALOG = [
 
 function fetchText(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }); }
 function fetchArrayBuffer(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); }); }
+async function fetchArrayBufferCors(u) {
+  try { return await fetchArrayBuffer(u); }
+  catch (e) {
+    const proxies = ['https://api.allorigins.win/raw?url=', 'https://corsproxy.io/?url=', 'https://thingproxy.freeboard.io/fetch/'];
+    let lastErr = e;
+    for (let i = 0; i < proxies.length; i++) {
+      try { return await fetchArrayBuffer(proxies[i] + encodeURIComponent(u)); }
+      catch (e2) { lastErr = e2; }
+    }
+    throw lastErr;
+  }
+}
 function fetchJson(u) { return fetch(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }); }
 
 function setCatalogStatus(s) { const el = $('catalogStatus'); if (el) el.textContent = s || ''; }
@@ -1304,17 +1361,16 @@ async function importFromGithub(repo, title) {
   try { await ensureEpubLibs(); }
   catch (e) { toast('阅读器组件加载失败（请检查网络或刷新页面）。'); return; }
   setCatalogStatus('正在连接 GitHub 仓库 ' + repo + ' …');
+  // 不再依赖 api.github.com（常受限），直接试 master / main 两个常见分支
   let branch = 'master';
-  try { const meta = await fetchJson('https://api.github.com/repos/' + repo); if (meta && meta.default_branch) branch = meta.default_branch; }
-  catch (e) { /* 兜底 master */ }
   let base = 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/src/epub/';
   setCatalogStatus('正在读取书目元数据…');
   let opfText = null;
-  try { opfText = await fetchText(base + 'content.opf'); }
+  try { opfText = await fetchTextCors(base + 'content.opf'); }
   catch (e) {
     if (branch === 'master') {
       branch = 'main'; base = 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/src/epub/';
-      try { opfText = await fetchText(base + 'content.opf'); }
+      try { opfText = await fetchTextCors(base + 'content.opf'); }
       catch (e2) { setCatalogStatus('无法读取该书源（' + repo + '）。请确认仓库名，或用「粘贴链接」导入。'); toast('导入失败'); return; }
     } else { setCatalogStatus('无法读取该书源。'); toast('导入失败'); return; }
   }
@@ -1337,7 +1393,7 @@ async function importFromGithub(repo, title) {
   let ok = 0;
   for (let i = 0; i < hrefs.length; i++) {
     const rel = hrefs[i].replace(/^\.\//, '');
-    try { const buf = await fetchArrayBuffer(base + rel); zip.file(rel, buf); ok++; }
+    try { const buf = await fetchArrayBufferCors(base + rel); zip.file(rel, buf); ok++; }
     catch (e) { /* 单项失败忽略，尽量拼出可读的书 */ }
     if (i % 4 === 0) setCatalogStatus('正在拼装电子书… ' + ok + '/' + hrefs.length);
   }
@@ -1348,8 +1404,7 @@ async function importFromGithub(repo, title) {
   setCatalogStatus('');
   hideCatalog();
   const url = URL.createObjectURL(blob);
-  openEpub(url, finalTitle);
-  toast('已打开：' + finalTitle);
+  openEpub(url, finalTitle); // 打开成功后的提示由 openEpub 负责，避免重复弹
 }
 
 function init() {

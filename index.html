@@ -224,9 +224,8 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="modalRoot" class="modal-root" hidden></div>
-<!-- 阅读器组件（epub.js / jszip）已本地化进仓库，不再依赖任何外部 CDN。
-     三个脚本均为 defer，按文档顺序执行：epub → jszip → app，故 app.js 运行时全局 ePub/JSZip 已就绪。 -->
-<script src="epub.min.js" defer></script>
+<!-- 英语书阅读器已改为「直接抓取 XHTML 章节渲染」，不再使用 epub.js。
+     仅 jszip 用于「上传本地 .epub」解包，作为本地脚本随页面 defer 加载。 -->
 <script src="jszip.min.js" defer></script>
 <script src="app.js" defer></script>
 </body>

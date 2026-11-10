@@ -415,6 +415,23 @@ textarea { resize: vertical; min-height: 76px; }
 .book-viewer .aozora-text .jisage_4, .book-viewer .aozora-text .jisage_5 { text-indent: 2em; }
 .book-viewer .aozora-text .naka-midashi { text-indent: 0; }
 
+/* 英语书正文排版（直接渲染 XHTML 章节，不再依赖 epub.js） */
+.book-viewer .book-body {
+  height: 100%; overflow-y: auto; max-width: 40em; margin: 0 auto;
+  padding: 20px 22px; font-size: 17px; line-height: 1.85; letter-spacing: .01em;
+  text-align: justify; font-family: Georgia, "Times New Roman", "Noto Serif", serif;
+}
+.book-viewer .book-body .en-chapter { margin-bottom: 1.6em; }
+.book-viewer .book-body .en-chapter[data-title]::before {
+  content: attr(data-title); display: block; font-weight: 700; font-size: 1.15em;
+  margin: 1.2em 0 .6em; line-height: 1.4;
+}
+.book-viewer .book-body p { margin: 0 0 1em; text-indent: 1.4em; }
+.book-viewer .book-body h1, .book-viewer .book-body h2 { text-align: center; margin: 1.4em 0 .6em; }
+.book-viewer .book-body h3, .book-viewer .book-body h4 { margin: 1.2em 0 .5em; }
+.book-viewer .book-body a[href] { color: #3a6ea5; }
+.book-viewer .book-body hr { border: none; border-top: 1px solid var(--line); margin: 1.6em 0; }
+
 /* 词条语言徽标 */
 .wc-tag.lang { background: rgba(214, 92, 92, .12); color: #c0504d; }
 

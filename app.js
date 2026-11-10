@@ -156,47 +156,8 @@ function toast(msg) {
 }
 function setStatus(id, msg) { const el = $(id); if (el) el.textContent = msg; }
 
-/* 阅读器组件（epub.js / jszip）按需懒加载：核心界面不依赖 CDN，
-   只有当真正打开英语 EPUB 时才去拉这两个库；日语青空文库路径完全不需要它们。
-   每个库都带多个 CDN 兜底，避免 jsdelivr 被墙时英语书读不了。 */
-let _epubLibsPromise = null;
-function loadScriptWithFallback(urls) {
-  return new Promise(function (resolve, reject) {
-    let i = 0;
-    function tryNext() {
-      if (i >= urls.length) { reject(new Error('全部 CDN 均加载失败')); return; }
-      const s = document.createElement('script');
-      s.src = urls[i++]; s.async = true;
-      s.onload = resolve;
-      s.onerror = function () { try { s.remove(); } catch (e) {} tryNext(); };
-      document.head.appendChild(s);
-    }
-    tryNext();
-  });
-}
-const EPUB_CDN = [
-  'https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
-  'https://fastly.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
-  'https://unpkg.com/epubjs@0.3.93/dist/epub.min.js'
-];
-const JSZIP_CDN = [
-  'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
-  'https://fastly.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
-  'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
-];
-function ensureEpubLibs() {
-  // 本地已随页面 defer 加载（epub.min.js / jszip.min.js），全局 ePub/JSZip 应已就绪，直接用。
-  if (typeof ePub !== 'undefined' && typeof JSZip !== 'undefined') return Promise.resolve();
-  // 极端兜底：本地脚本意外缺失（例如上传时漏了这两个文件）时再从 CDN 补。
-  if (_epubLibsPromise) return _epubLibsPromise;
-  _epubLibsPromise = Promise.all([
-    loadScriptWithFallback(EPUB_CDN),
-    loadScriptWithFallback(JSZIP_CDN)
-  ]).then(function () {
-    if (typeof ePub === 'undefined' || typeof JSZip === 'undefined') throw new Error('组件未就绪');
-  });
-  return _epubLibsPromise;
-}
+/* 英语书阅读器不再使用 epub.js：直接抓取 Standard Ebooks 的 XHTML 章节渲染。
+   JSZip 仅用于「上传本地 .epub」解包，作为本地脚本随页面 defer 加载（全局 JSZip）。 */
 
 function loadData() {
   try {
@@ -973,77 +934,49 @@ var book = null, rendition = null, pendingSel = { text: '', sentence: '', word: 
 var currentLang = 'en', catalogLang = 'en';
 
 function closeBook() {
-  try { if (rendition) { rendition.destroy(); rendition = null; } } catch (e) {}
-  try { if (book) { book.destroy(); book = null; } } catch (e) {}
   const viewer = $('bookViewer');
   if (viewer) { viewer.onmouseup = null; viewer.innerHTML = ''; }
+  book = null; rendition = null;
+  const bar = $('readerBar'); if (bar) bar.hidden = true;
+  pendingSel = { text: '', sentence: '', word: '' };
 }
 
-async function loadEpubFile(file) {
-  try { await ensureEpubLibs(); }
-  catch (e) { toast('阅读器组件加载失败（请检查网络，或改用「书库」里的日语书）。'); return; }
-  const url = URL.createObjectURL(file);
-  openEpub(url, (file.name || '').replace(/\.epub$/i, ''));
-}
+/* ---------- 英语书阅读器：直接抓取 Standard Ebooks 的 XHTML 章节渲染（不再依赖 epub.js） ---------- */
 
-async function loadEpubFromUrl() {
-  const u = window.prompt('粘贴一个 .epub 的下载链接（例如 Standard Ebooks 的 EPUB 链接）：');
-  if (!u) return;
-  toast('正在加载…');
-  try { await ensureEpubLibs(); }
-  catch (e) { toast('阅读器组件加载失败（请检查网络）。'); return; }
-  openEpub(u, '');
-}
-
-async function openEpub(url, fallbackTitle) {
-  try { await ensureEpubLibs(); }
-  catch (e) { toast('阅读器组件加载失败（请检查网络或刷新页面）。'); return; }
-  closeBook();
-  try { book = ePub(url); } catch (e) { toast('无法打开这本书：' + e.message); return; }
-  currentLang = 'en';
-  bookTitle = fallbackTitle || '未命名';
-  const viewer = $('bookViewer');
-  viewer.innerHTML = '';
-  try {
-    rendition = book.renderTo(viewer, { width: '100%', height: '100%', flow: 'scrolled', spread: 'none' });
-  } catch (e) { toast('初始化阅读器失败：' + e.message); return; }
-  rendition.display().then(function () {
-    bindReaderSelection();
-    // 可见性兜底：确认阅读器 iframe 已注入容器，否则给出明确提示而非静默空白
-    const ifr = viewer.querySelector('iframe');
-    if (!ifr) { toast('渲染完成但未生成阅读视图，请刷新页面重试'); return; }
-    toast('已打开：' + bookTitle);
-  }).catch(function (e) { toast('渲染失败：' + (e && e.message ? e.message : e)); });
-  book.loaded.metadata.then(function (m) { if (m && m.title) bookTitle = m.title; });
-  book.loaded.navigation.then(function (nav) {
-    renderToc(nav.toc);
-    resumeProgress();
-  }).catch(function () {
-    $('readerToc').innerHTML = '<p class="toc-empty">这本书没有可用目录。</p>';
+// 解析 content.opf：按 spine 顺序返回章节 XHTML 路径数组
+function parseOpf(opfText) {
+  const doc = new DOMParser().parseFromString(opfText, 'application/xml');
+  const manifest = {};
+  doc.querySelectorAll('manifest > item').forEach(function (it) {
+    const id = it.getAttribute('id'), href = it.getAttribute('href'), mt = it.getAttribute('media-type') || '';
+    if (id && href) manifest[id] = { href: href, xhtml: /xhtml/i.test(mt) || /\.x?html?$/i.test(href) };
   });
-  rendition.on('relocated', function (loc) {
-    try { if (loc && loc.start && loc.start.cfi) localStorage.setItem('epub-progress:' + bookTitle, loc.start.cfi); } catch (e) {}
+  const spine = [];
+  doc.querySelectorAll('spine > itemref').forEach(function (ir) {
+    const idref = ir.getAttribute('idref');
+    if (idref && manifest[idref] && manifest[idref].xhtml) spine.push(manifest[idref].href);
   });
+  if (!spine.length) Object.keys(manifest).forEach(function (k) { if (manifest[k].xhtml) spine.push(manifest[k].href); });
+  return spine;
 }
 
-function resumeProgress() {
-  let cfi = null;
-  try { cfi = localStorage.getItem('epub-progress:' + bookTitle); } catch (e) {}
-  if (cfi) rendition.display(cfi).then(bindReaderSelection).catch(function () {});
+// 取单个 XHTML 章节的正文（去掉封面/装饰图片，避免无谓的跨域请求）
+function chapterBody(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('img, svg').forEach(function (n) { n.remove(); });
+  const body = doc.body;
+  return body ? body.innerHTML : html;
 }
 
-function renderToc(items, depth) {
-  depth = depth || 0;
-  const box = $('readerToc');
-  if (depth === 0) box.innerHTML = '';
-  (items || []).forEach(function (it) {
+function buildTocFromSections(wrap) {
+  const box = $('readerToc'); box.innerHTML = '';
+  const secs = wrap.querySelectorAll(':scope > section');
+  secs.forEach(function (sec, i) {
     const a = document.createElement('a');
-    a.textContent = it.label || '(无标题)';
+    a.textContent = sec.getAttribute('data-title') || ('第 ' + (i + 1) + ' 章');
     a.href = 'javascript:;';
-    if (depth > 0) a.className = 'toc-indent';
-    a.onclick = function () { rendition.display(it.href).then(bindReaderSelection); markActiveToc(a); };
+    a.onclick = function () { sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); markActiveToc(a); };
     box.appendChild(a);
-    if (it.subitems && it.subitems.length) renderToc(it.subitems, depth + 1);
   });
 }
 
@@ -1052,28 +985,67 @@ function markActiveToc(a) {
   a.classList.add('is-active');
 }
 
-function getViewerSelection() {
-  const iframe = $('bookViewer').querySelector('iframe');
-  if (!iframe) return null;
-  const win = iframe.contentWindow || (iframe.contentDocument && iframe.contentDocument.defaultView);
-  const sel = win && win.getSelection && win.getSelection();
-  if (!sel || !sel.toString().trim()) return null;
-  return sel;
+// 把章节 HTML 渲染进阅读器（英语路径；日语由 renderAozoraBody 渲染）
+function renderBook(sections, title) {
+  const viewer = $('bookViewer');
+  closeBook();
+  const wrap = document.createElement('div');
+  wrap.className = 'book-body';
+  wrap.innerHTML = sections.join('');
+  viewer.appendChild(wrap);
+  currentLang = 'en';
+  bookTitle = title || '未命名';
+  setCatalogStatus('');
+  hideCatalog();
+  bindViewerSelection();
+  buildTocFromSections(wrap);
+  toast('已打开：' + bookTitle);
 }
 
-function bindReaderSelection() {
-  if (!rendition) return;
-  try { rendition.off('selected'); } catch (e) {}
-  rendition.on('selected', function () {
-    const sel = getViewerSelection();
-    if (!sel) return;
-    const text = sel.toString().trim();
+// 上传本地 .epub（用 JSZip 解包后直接渲染章节）
+async function loadEpubFile(file) {
+  if (typeof JSZip === 'undefined') { toast('解包组件未加载，请刷新页面'); return; }
+  setCatalogStatus('正在解析 EPUB…');
+  try {
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const container = await zip.file('META-INF/container.xml').async('text');
+    const cdoc = new DOMParser().parseFromString(container, 'application/xml');
+    const rootfile = cdoc.querySelector('rootfile');
+    const opfPath = rootfile ? rootfile.getAttribute('full-path') : 'content.opf';
+    const opfText = await zip.file(opfPath).async('text');
+    const dir = opfPath.split('/').slice(0, -1).join('/');
+    const chapters = parseOpf(opfText).map(function (h) { return (dir ? dir + '/' : '') + h.replace(/^\.\//, ''); });
+    const sections = [];
+    for (const rel of chapters) {
+      const f = zip.file(rel);
+      if (f) sections.push('<section class="en-chapter" data-title="">' + chapterBody(await f.async('text')) + '</section>');
+    }
+    renderBook(sections, (file.name || '').replace(/\.epub$/i, ''));
+  } catch (e) { setCatalogStatus(''); toast('EPUB 解析失败：' + e.message); }
+}
+
+// 粘贴 Standard Ebooks 页面链接导入
+async function loadEpubFromUrl() {
+  const u = window.prompt('粘贴 Standard Ebooks 书籍页面链接（例如 https://standardebooks.org/ebooks/...）：');
+  if (!u) return;
+  const repo = repoFromUrl(u);
+  if (!repo) { toast('无法识别该链接（仅支持 Standard Ebooks 页面链接）'); return; }
+  importFromGithub(repo, '');
+}
+
+// 统一划词：英语/日语都直接从 window.getSelection 取选区，不再依赖 iframe
+function bindViewerSelection() {
+  const viewer = $('bookViewer');
+  viewer.onmouseup = function () {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : '';
+    if (!text || !sel.anchorNode || !viewer.contains(sel.anchorNode)) return;
     pendingSel.text = text;
-    pendingSel.word = text.split(/\s+/)[0].replace(/[^A-Za-z'-]/g, '');
+    pendingSel.word = currentLang === 'ja' ? text : text.split(/\s+/)[0].replace(/[^A-Za-z'-]/g, '');
     pendingSel.sentence = selectionSentence(sel);
     $('readerSelText').textContent = '已选：' + (text.length > 40 ? text.slice(0, 40) + '…' : text);
     $('readerBar').hidden = false;
-  });
+  };
 }
 
 function selectionSentence(sel) {
@@ -1151,40 +1123,35 @@ function renderAozoraBody(body, title) {
   bookTitle = title;
   setCatalogStatus('');
   hideCatalog();
-  bindAozoraSelection();
+  bindViewerSelection();
   toast('已打开：' + bookTitle);
 }
 
-/* 直连优先，失败依次尝试多个 CORS 代理（应对浏览器跨域拦截） */
+/* 直连优先；对 GitHub raw 源额外用 jsdelivr /gh/ 镜像兜底；最后再试 CORS 代理 */
 async function fetchTextCors(url) {
   try { return await fetchText(url); }
   catch (e) {
+    let lastErr = e;
+    // GitHub raw 源 → 换 jsdelivr gh 镜像（带 CORS、国内通常更稳）
+    const gh = url.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (gh) {
+      const mirror = 'https://cdn.jsdelivr.net/gh/' + gh[1] + '/' + gh[2] + '@' + gh[3] + '/' + gh[4];
+      try { return await fetchText(mirror); }
+      catch (e2) { lastErr = e2; }
+      try { return await fetchText('https://fastly.jsdelivr.net/gh/' + gh[1] + '/' + gh[2] + '@' + gh[3] + '/' + gh[4]); }
+      catch (e2) { lastErr = e2; }
+    }
     const proxies = [
       'https://api.allorigins.win/raw?url=',
       'https://corsproxy.io/?url=',
       'https://thingproxy.freeboard.io/fetch/'
     ];
-    let lastErr = e;
     for (let i = 0; i < proxies.length; i++) {
       try { return await fetchText(proxies[i] + encodeURIComponent(url)); }
       catch (e2) { lastErr = e2; }
     }
     throw lastErr;
   }
-}
-
-function bindAozoraSelection() {
-  const viewer = $('bookViewer');
-  viewer.onmouseup = function () {
-    const sel = window.getSelection();
-    const text = sel ? sel.toString().trim() : '';
-    if (!text || !sel.anchorNode || !viewer.contains(sel.anchorNode)) return;
-    pendingSel.text = text;
-    pendingSel.word = text;
-    pendingSel.sentence = selectionSentence(sel);
-    $('readerSelText').textContent = '已选：' + (text.length > 40 ? text.slice(0, 40) + '…' : text);
-    $('readerBar').hidden = false;
-  };
 }
 
 function readerSave() {
@@ -1358,10 +1325,7 @@ function bookTitleFromOpf(opf) {
 }
 
 async function importFromGithub(repo, title) {
-  try { await ensureEpubLibs(); }
-  catch (e) { toast('阅读器组件加载失败（请检查网络或刷新页面）。'); return; }
   setCatalogStatus('正在连接 GitHub 仓库 ' + repo + ' …');
-  // 不再依赖 api.github.com（常受限），直接试 master / main 两个常见分支
   let branch = 'master';
   let base = 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/src/epub/';
   setCatalogStatus('正在读取书目元数据…');
@@ -1374,37 +1338,23 @@ async function importFromGithub(repo, title) {
       catch (e2) { setCatalogStatus('无法读取该书源（' + repo + '）。请确认仓库名，或用「粘贴链接」导入。'); toast('导入失败'); return; }
     } else { setCatalogStatus('无法读取该书源。'); toast('导入失败'); return; }
   }
-  if (!opfText) { setCatalogStatus('书目内容为空。'); return; }
-  const mMan = opfText.match(/<manifest[\s\S]*?<\/manifest>/i);
-  let hrefs = [];
-  if (mMan) { const re = /\shref="([^"]+)"/g; let mm; while ((mm = re.exec(mMan[0]))) hrefs.push(mm[1]); }
-  hrefs = hrefs.filter(function (h) { return h && !/^https?:/i.test(h); });
-  if (!hrefs.length) { setCatalogStatus('书目里没有可读取的内容。'); toast('导入失败'); return; }
-  setCatalogStatus('正在拼装电子书（' + hrefs.length + ' 个文件）…');
-  const zip = new JSZip();
-  zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
-  zip.file('META-INF/container.xml',
-    '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n' +
-    '  <rootfiles>\n' +
-    '    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>\n' +
-    '  </rootfiles>\n' +
-    '</container>');
-  let ok = 0;
-  for (let i = 0; i < hrefs.length; i++) {
-    const rel = hrefs[i].replace(/^\.\//, '');
-    try { const buf = await fetchArrayBufferCors(base + rel); zip.file(rel, buf); ok++; }
-    catch (e) { /* 单项失败忽略，尽量拼出可读的书 */ }
-    if (i % 4 === 0) setCatalogStatus('正在拼装电子书… ' + ok + '/' + hrefs.length);
+  const chapters = parseOpf(opfText);
+  if (!chapters.length) { setCatalogStatus('书目里没有可读取的章节。'); toast('导入失败'); return; }
+  setCatalogStatus('正在下载正文（' + chapters.length + ' 章）…');
+  const sections = [];
+  for (let i = 0; i < chapters.length; i++) {
+    const rel = chapters[i].replace(/^\.\//, '');
+    try {
+      const html = await fetchTextCors(base + rel);
+      const t = (html.match(/<title>([^<]*)<\/title>/i) || [,''])[1].trim();
+      sections.push('<section class="en-chapter" data-title="' + (t || '').replace(/"/g, '&quot;') + '">' + chapterBody(html) + '</section>');
+    } catch (e) {
+      sections.push('<section class="en-chapter" data-title=""><p>[第 ' + (i + 1) + ' 章加载失败：' + e.message + ']</p></section>');
+    }
+    setCatalogStatus('正在下载正文… ' + (i + 1) + '/' + chapters.length);
   }
-  if (!ok) { setCatalogStatus('所有文件都抓取失败，请检查网络或稍后重试。'); toast('导入失败'); return; }
-  setCatalogStatus('正在生成电子书…');
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const finalTitle = title || bookTitleFromOpf(opfText) || repo.split('/').pop();
-  setCatalogStatus('');
-  hideCatalog();
-  const url = URL.createObjectURL(blob);
-  openEpub(url, finalTitle); // 打开成功后的提示由 openEpub 负责，避免重复弹
+  const metaTitle = (opfText.match(/<dc:title>([^<]*)<\/dc:title>/i) || [,''])[1].trim();
+  renderBook(sections, title || metaTitle || repo.split('/').pop());
 }
 
 function init() {
